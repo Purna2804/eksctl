@@ -1,0 +1,65 @@
+#!/bin/bash 
+
+growpart /dev/nvme0n1 4
+pvresize /dev/nvme0n1p4 
+lvextend -r -L +${30}G /dev/mapper/RootVG-varVol 
+xfs_growfs /var 
+
+#Docker 
+sudo dnf -y install dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/rhel/docker-ce.repo
+sudo dnf install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+sudo systemctl start docker 
+sudo systemctl enable docker 
+usermod -aG docker ec2-user 
+
+#eksctl 
+# for ARM systems, set ARCH to: `arm64`
+ARCH=amd64
+PLATFORM=$(uname -s)_$ARCH
+
+curl -sLO "https://github.com/eksctl-io/eksctl/releases/latest/download/eksctl_$PLATFORM.tar.gz"
+tar -xzf eksctl_$PLATFORM.tar.gz -C /tmp && rm eksctl_$PLATFORM.tar.gz
+sudo install -m 0755 /tmp/eksctl /usr/local/bin && rm /tmp/eksctl
+
+# kubectl 
+curl -O https://s3.us-west-2.amazonaws.com/amazon-eks/1.36.2/2026-07-05/bin/linux/amd64/kubectl
+chmod +x ./kubectl
+cp kubectl /usr/local/bin/kubectl 
+
+# kubens (from kubectx project, pure bash version)
+curl -sLO /tmp/kubens https://github.com/ahmetb/kubectx/tree/master/cmd/kubens
+install -m 0755 /tmp/kubens /usr/local/bin/kubens && rm /tmp/kubens
+# install copies the file to the destination and sets its permissions in one step.
+
+#k9s
+curl -sLO https://github.com/derailed/k9s/releases/latest/download/k9s_Linux_amd64.tar.gz
+tar -xzf k9s_Linux_amd64.tar.gz -C /tmp k9s && rm k9s_Linux_amd64.tar.gz
+install -m 0755 /tmp/k9s /usr/local/bin/k9s && rm /tmp/k9s
+
+# AWS credentials 
+mkdir -p /home/ec2-user/.aws 
+cat << EOF > /home/ec2-user/.aws/credentials 
+[default]
+aws_access_key          = ${aws_access_key} 
+aws_secret_access_key   = ${aws_secret_key}
+EOF 
+
+cat << EOF > /home/ec2-user/.aws/config 
+[default]
+region = us-east-1 
+output = json 
+EOF 
+
+chown -R ec2-user:ec2-user /home/ec2-user/.aws 
+chown 600 /home/ec2-user/.aws/credentials 
+chown 600 /home/ec2-user/.aws/config 
+
+cd /home/ec2-user
+sudo -u ec2-user git clone https://github.com/Chandu2828/eksctl.git 
+cd eksctl 
+sudo -u ec2-user eksctl create cluster -f /home/ec2-user/eksctl/eksctl.yaml  
+
+sudo -u ec2-user aws eks update-kubeconfig --name=roboshop --region=us-east-1 
+sudo -u ec2-user /usr/local/bin/kubectl get nodes 
